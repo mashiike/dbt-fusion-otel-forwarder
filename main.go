@@ -13,7 +13,7 @@ import (
 	"github.com/mashiike/dbt-fusion-otel-forwarder/app"
 )
 
-var Version = "v0.0.0"
+var Version = "v0.1.0"
 
 func main() {
 	if code := run(); code != 0 {
