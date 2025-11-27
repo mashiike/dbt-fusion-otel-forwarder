@@ -196,6 +196,9 @@ func (d *Decoder) DecodeLines(lines []string) ([]*tracepb.Span, []*logspb.LogRec
 	// Sort complete spans by start time for deterministic output
 	sortSpansByStartTime(completeSpans)
 
+	// Sort logs by time for deterministic output
+	sortLogsByTime(logs)
+
 	return completeSpans, logs, nil
 }
 
@@ -244,6 +247,25 @@ func sortSpansByStartTime(spans []*tracepb.Span) {
 				// If start time is equal, sort by span_id for deterministic output
 				if compareBytes(spans[j].SpanId, spans[j+1].SpanId) > 0 {
 					spans[j], spans[j+1] = spans[j+1], spans[j]
+				}
+			}
+		}
+	}
+}
+
+// sortLogsByTime sorts logs by their time (ascending), then by span_id for determinism
+func sortLogsByTime(logs []*logspb.LogRecord) {
+	// Simple bubble sort (good enough for moderate sized arrays)
+	n := len(logs)
+	for i := 0; i < n-1; i++ {
+		for j := 0; j < n-i-1; j++ {
+			// Sort by time first
+			if logs[j].TimeUnixNano > logs[j+1].TimeUnixNano {
+				logs[j], logs[j+1] = logs[j+1], logs[j]
+			} else if logs[j].TimeUnixNano == logs[j+1].TimeUnixNano {
+				// If time is equal, sort by span_id for deterministic output
+				if compareBytes(logs[j].SpanId, logs[j+1].SpanId) > 0 {
+					logs[j], logs[j+1] = logs[j+1], logs[j]
 				}
 			}
 		}

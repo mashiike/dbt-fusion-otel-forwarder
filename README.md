@@ -14,16 +14,20 @@ dbt-fusion-otel-forwarder --config config.yml -- dbt build
 ```
 
 ## Configuration
-Write your configuration in YAML. To inject environment variables, use ```{{ env `KEY` }}``.
+Write your configuration in YAML. Environment variables can be injected using the following syntax:
+
+- `${VAR}` - Simple variable expansion
+- `${VAR:-default}` - Use default value if VAR is unset or empty
+- `${VAR:?error message}` - Fail with error message if VAR is unset or empty
 
 ```yaml
 exporters:
   otlp:
     type: otlp
-    endpoint: http://localhost:4318
+    endpoint: "${OTLP_ENDPOINT:-http://localhost:4318}"
     protocol: http/protobuf
     headers:
-      x-otlp-token: "{{ env `OTLP_TOKEN` }}"
+      x-otlp-token: "${OTLP_TOKEN:?OTLP_TOKEN is required}"
 
 forward:
   default:

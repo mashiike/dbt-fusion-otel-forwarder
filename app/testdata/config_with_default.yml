@@ -1,7 +1,7 @@
 exporters:
   otlp:
     type: otlp
-    endpoint: "http://localhost:4317"
+    endpoint: "${OTLP_ENDPOINT:-http://localhost:4317}"
     headers:
       "Authorization": "Bearer ${API_KEY}"
 

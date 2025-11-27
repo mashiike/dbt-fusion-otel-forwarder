@@ -17,16 +17,20 @@ dbt-fusion-otel-forwarder --config config.yml -- dbt build
 
 ## 設定
 YAMLで以下のように記述します。
-環境変数経由で値を設定する場合は ```{{ env `KEY` }}``` のように表記することで埋め込めます。
+環境変数経由で値を設定する場合は以下の記法が使えます:
+
+- `${VAR}` - シンプルな変数展開
+- `${VAR:-デフォルト値}` - VARが未設定または空の場合にデフォルト値を使用
+- `${VAR:?エラーメッセージ}` - VARが未設定または空の場合にエラーメッセージを出してエラー終了
 
 ```yaml
 exporters:
   otlp:
     type: otlp
-    endpoint: http://localhost:4318
+    endpoint: "${OTLP_ENDPOINT:-http://localhost:4318}"
     protocol: http/protobuf
     headers:
-      x-otlp-token: "{{ env `OTLP_TOKEN` }}"
+      x-otlp-token: "${OTLP_TOKEN:?OTLP_TOKEN は必須です}"
 
 forward:
   default:

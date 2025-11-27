@@ -1,7 +1,17 @@
+# Example configuration for dbt-fusion-otel-forwarder
+#
+# Environment variable expansion syntax:
+#   ${VAR}              - Simple variable expansion
+#   ${VAR:-default}     - Use default value if VAR is unset or empty
+#   ${VAR:?error msg}   - Fail with error message if VAR is unset or empty
+
 exporters:
   otlp:
     type: otlp
-    endpoint: "http://localhost:4317"
+    endpoint: "${OTLP_ENDPOINT:-http://localhost:4317}"
+    # Uncomment to add authentication headers
+    # headers:
+    #   Authorization: "Bearer ${API_TOKEN:?API_TOKEN is required}"
 
 forward:
   default:
