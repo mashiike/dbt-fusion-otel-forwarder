@@ -2,7 +2,9 @@ package app
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/hex"
+	"encoding/json"
 	"os"
 	"testing"
 
@@ -214,6 +216,14 @@ func decodeOTELLines(lines []string, cutoffTimeNano uint64) ([]*tracepb.Span, []
 	return decoder.DecodeLines(lines)
 }
 
+func minifyJSON(input []byte) ([]byte, error) {
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, input); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
 // serializeSpansToJSONL converts spans to JSONL format using protojson
 func serializeSpansToJSONL(t *testing.T, spans []*tracepb.Span) []byte {
 	t.Helper()
@@ -228,7 +238,11 @@ func serializeSpansToJSONL(t *testing.T, spans []*tracepb.Span) []byte {
 		if err != nil {
 			t.Fatalf("failed to marshal span: %v", err)
 		}
-		result = append(result, jsonBytes...)
+		minified, err := minifyJSON(jsonBytes)
+		if err != nil {
+			t.Fatalf("failed to minify span json: %v", err)
+		}
+		result = append(result, minified...)
 		result = append(result, '\n')
 	}
 	return result
@@ -248,7 +262,11 @@ func serializeLogsToJSONL(t *testing.T, logs []*logspb.LogRecord) []byte {
 		if err != nil {
 			t.Fatalf("failed to marshal log: %v", err)
 		}
-		result = append(result, jsonBytes...)
+		minified, err := minifyJSON(jsonBytes)
+		if err != nil {
+			t.Fatalf("failed to minify log json: %v", err)
+		}
+		result = append(result, minified...)
 		result = append(result, '\n')
 	}
 	return result
