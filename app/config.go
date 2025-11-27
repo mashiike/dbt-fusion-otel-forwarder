@@ -53,9 +53,8 @@ type OtlpExporterConfig struct {
 	UserAgent     string            `yaml:"user_agent,omitempty"`     // Custom user agent
 
 	// Per-signal configurations
-	Traces  *OtlpSignalConfig `yaml:"traces,omitempty"`
-	Metrics *OtlpSignalConfig `yaml:"metrics,omitempty"`
-	Logs    *OtlpSignalConfig `yaml:"logs,omitempty"`
+	Traces *OtlpSignalConfig `yaml:"traces,omitempty"`
+	Logs   *OtlpSignalConfig `yaml:"logs,omitempty"`
 }
 
 type OtlpSignalConfig struct {
@@ -116,28 +115,6 @@ func (cfg *OtlpExporterConfig) ClientOptions() []otlp.ClientOption {
 		}
 	}
 
-	// Metrics-specific options
-	if cfg.Metrics != nil {
-		if cfg.Metrics.Endpoint != "" {
-			opts = append(opts, otlp.WithMetricsEndpoint(cfg.Metrics.Endpoint))
-		}
-		if cfg.Metrics.Protocol != "" {
-			opts = append(opts, otlp.WithMetricsProtocol(cfg.Metrics.Protocol))
-		}
-		if cfg.Metrics.Gzip != nil {
-			opts = append(opts, otlp.WithMetricsGzip(*cfg.Metrics.Gzip))
-		}
-		if len(cfg.Metrics.Headers) > 0 {
-			opts = append(opts, otlp.WithMetricsHeaders(cfg.Metrics.Headers))
-		}
-		if cfg.Metrics.ExportTimeout != nil {
-			opts = append(opts, otlp.WithMetricsExportTimeout(*cfg.Metrics.ExportTimeout))
-		}
-		if cfg.Metrics.UserAgent != "" {
-			opts = append(opts, otlp.WithMetricsUserAgent(cfg.Metrics.UserAgent))
-		}
-	}
-
 	// Logs-specific options
 	if cfg.Logs != nil {
 		if cfg.Logs.Endpoint != "" {
@@ -166,7 +143,6 @@ func (cfg *OtlpExporterConfig) ClientOptions() []otlp.ClientOption {
 type ForwardConfig struct {
 	Resource *ForwardResourceConfig `yaml:"resource,omitempty"`
 	Traces   *TracesForwardConfig   `yaml:"traces,omitempty"`
-	Metrics  *MetricsForwardConfig  `yaml:"metrics,omitempty"`
 	Logs     *LogsForwardConfig     `yaml:"logs,omitempty"`
 }
 
@@ -174,11 +150,6 @@ func (cfg *ForwardConfig) Validate(exporters map[string]ExporterConfig) error {
 	if cfg.Traces != nil {
 		if err := cfg.Traces.Validate(exporters); err != nil {
 			return fmt.Errorf("traces.%w", err)
-		}
-	}
-	if cfg.Metrics != nil {
-		if err := cfg.Metrics.Validate(exporters); err != nil {
-			return fmt.Errorf("metrics.%w", err)
 		}
 	}
 	if cfg.Logs != nil {
@@ -189,12 +160,42 @@ func (cfg *ForwardConfig) Validate(exporters map[string]ExporterConfig) error {
 	return nil
 }
 
+type AttributeModifierConfig struct {
+	Action    string  `yaml:"action"` // "set", "remove"
+	When      *string `yaml:"when"`
+	Key       string  `yaml:"key"`
+	Value     any     `yaml:"value"`
+	ValueExpr string  `yaml:"value_expr,omitempty"`
+}
+
+func (cfg *AttributeModifierConfig) Validate() error {
+	if cfg.Action == "" {
+		cfg.Action = "set"
+	}
+	if cfg.Action != "set" && cfg.Action != "remove" {
+		return fmt.Errorf("action must be one of 'set', 'remove'")
+	}
+	if cfg.Key == "" {
+		return fmt.Errorf("key is required")
+	}
+	if cfg.Action == "set" {
+		if cfg.Value == nil && cfg.ValueExpr == "" {
+			return errors.New("either value or value_expr must be set")
+		}
+		if cfg.ValueExpr != "" && cfg.Value != nil {
+			return errors.New("cannnot both value and value_expr be set")
+		}
+	}
+	return nil
+}
+
 type ForwardResourceConfig struct {
 	Attributes map[string]any `yaml:"attributes"`
 }
 
 type TracesForwardConfig struct {
-	Exporters []string `yaml:"exporters"`
+	Attributes []AttributeModifierConfig `yaml:"attributes,omitempty"`
+	Exporters  []string                  `yaml:"exporters"`
 }
 
 func (cfg *TracesForwardConfig) Validate(exporters map[string]ExporterConfig) error {
@@ -203,30 +204,28 @@ func (cfg *TracesForwardConfig) Validate(exporters map[string]ExporterConfig) er
 			return fmt.Errorf("traces exporter %s is not defined", name)
 		}
 	}
-	return nil
-}
-
-type MetricsForwardConfig struct {
-	Exporters []string `yaml:"exporters"`
-}
-
-func (cfg *MetricsForwardConfig) Validate(exporters map[string]ExporterConfig) error {
-	for _, name := range cfg.Exporters {
-		if _, ok := exporters[name]; !ok {
-			return fmt.Errorf("metrics exporter %s is not defined", name)
+	for _, attrMod := range cfg.Attributes {
+		if err := attrMod.Validate(); err != nil {
+			return fmt.Errorf("invalid trace attribute modifier: %w", err)
 		}
 	}
 	return nil
 }
 
 type LogsForwardConfig struct {
-	Exporters []string `yaml:"exporters"`
+	Attributes []AttributeModifierConfig `yaml:"attributes,omitempty"`
+	Exporters  []string                  `yaml:"exporters"`
 }
 
 func (cfg *LogsForwardConfig) Validate(exporters map[string]ExporterConfig) error {
 	for _, name := range cfg.Exporters {
 		if _, ok := exporters[name]; !ok {
 			return fmt.Errorf("logs exporter %s is not defined", name)
+		}
+	}
+	for _, attrMod := range cfg.Attributes {
+		if err := attrMod.Validate(); err != nil {
+			return fmt.Errorf("invalid log attribute modifier: %w", err)
 		}
 	}
 	return nil

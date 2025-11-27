@@ -9,11 +9,11 @@ import (
 	"github.com/mashiike/go-otlp-helper/otlp"
 )
 
+//go:generate go tool mockgen -source=$GOFILE -destination=./exporter_test.go -package=app
 type Exporter interface {
 	Start(ctx context.Context) error
 	Stop(ctx context.Context) error
 	UploadLogs(ctx context.Context, protoLogs []*otlp.ResourceLogs) error
-	UploadMetrics(ctx context.Context, protoMetrics []*otlp.ResourceMetrics) error
 	UploadTraces(ctx context.Context, protoSpans []*otlp.ResourceSpans) error
 }
 
@@ -68,10 +68,6 @@ func (e *NoopExporter) Stop(ctx context.Context) error {
 }
 
 func (e *NoopExporter) UploadLogs(ctx context.Context, protoLogs []*otlp.ResourceLogs) error {
-	return nil
-}
-
-func (e *NoopExporter) UploadMetrics(ctx context.Context, protoMetrics []*otlp.ResourceMetrics) error {
 	return nil
 }
 
@@ -150,32 +146,6 @@ func (e *MultiplexExporter) UploadLogs(ctx context.Context, protoLogs []*otlp.Re
 		go func(exp Exporter) {
 			defer wg.Done()
 			if err := exp.UploadLogs(ctx, protoLogs); err != nil {
-				errCh <- err
-			}
-		}(exporter)
-	}
-
-	wg.Wait()
-	close(errCh)
-	var errs []error
-	for err := range errCh {
-		errs = append(errs, err)
-	}
-	if len(errs) > 0 {
-		return errors.Join(errs...)
-	}
-	return nil
-}
-
-func (e *MultiplexExporter) UploadMetrics(ctx context.Context, protoMetrics []*otlp.ResourceMetrics) error {
-	var wg sync.WaitGroup
-	errCh := make(chan error, len(e.exporters))
-
-	for _, exporter := range e.exporters {
-		wg.Add(1)
-		go func(exp Exporter) {
-			defer wg.Done()
-			if err := exp.UploadMetrics(ctx, protoMetrics); err != nil {
 				errCh <- err
 			}
 		}(exporter)

@@ -54,10 +54,19 @@ func New(ctx context.Context, cfg *Config) (*App, error) {
 // Run executes the wrapper: invoke dbt, then forward the OTEL log.
 func (a *App) Run(ctx context.Context, params RunParams) int {
 	if len(params.TargetCmd) == 0 {
-		fmt.Fprintln(a.Stderr, "no dbt command specified")
+		fmt.Fprintln(a.Stderr, "no command specified")
 		return 1
 	}
-
+	forwarders := NewForwarders(ctx, a.cfg)
+	defer func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer stopCancel()
+		for _, forwarder := range forwarders {
+			if err := forwarder.Stop(stopCtx); err != nil {
+				a.Logger.Warn("failed to stop forwarder", "error", err)
+			}
+		}
+	}()
 	logDir := params.LogPath
 	otelFile := params.OtelFile
 	otelPath := otelFile
@@ -93,7 +102,7 @@ func (a *App) Run(ctx context.Context, params RunParams) int {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		if err := a.flushAndUpload(ctx, lines, otelPath, startTimeNano, params); err != nil {
+		if err := a.flushAndUpload(ctx, lines, forwarders, startTimeNano, params); err != nil {
 			a.Logger.Warn("OTEL upload failed", "error", err)
 		}
 	}()
@@ -219,18 +228,7 @@ func (a *App) tailOTELFile(ctx context.Context, path string, lines chan<- string
 }
 
 // flushAndUpload reads lines from channel, buffers them, and periodically uploads traces.
-func (a *App) flushAndUpload(ctx context.Context, lines <-chan string, srcPath string, cutoffTimeNano uint64, params RunParams) error {
-	forwarders := NewForwarders(ctx, a.cfg)
-	defer func() {
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer stopCancel()
-		for _, forwarder := range forwarders {
-			if err := forwarder.Stop(stopCtx); err != nil {
-				a.Logger.Warn("failed to stop forwarder", "error", err)
-			}
-		}
-	}()
-
+func (a *App) flushAndUpload(ctx context.Context, lines <-chan string, forwarders []*Forwarder, cutoffTimeNano uint64, params RunParams) error {
 	// Create decoder once and reuse it to maintain state across flushes
 	decoder := NewDecoder(cutoffTimeNano)
 	buffer := make([]string, 0, 100)
