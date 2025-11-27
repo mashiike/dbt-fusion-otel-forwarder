@@ -39,10 +39,30 @@ forward:
         "service.name": "${DBT_OTEL_SERVICE_NAME:-dbt}"
     traces:
       exporters: [otlp]
+      attributes:
+        # 静的な属性を追加
+        - action: set
+          key: "http.request.method"
+          value: "POST"
+
+        # CEL式を使った動的な属性追加
+        - action: set
+          when: name.contains("Node evaluated")
+          key: "url.path"
+          value_expr: attributes["dbt.unique_id"]
+
+        # 機密情報を削除
+        - action: remove
+          key: "sensitive_data"
 ```
 
 - `exporters`: OTLP exporter を名前付きで定義（protocol/gzip/headers/timeouts/user agent などの上書き可）。
-- `forward`: ルーティング設定。本プロジェクトは現状 trace を送信（logs/metrics セクションも将来のために解釈）。
+- `forward`: ルーティング設定。本プロジェクトは trace と log を送信します。
+  - `attributes`: 静的な値またはCEL式を使ってspan/log属性を変更できます。
+    - `action`: `set` (追加/更新) または `remove` (削除)
+    - `when`: オプショナルなCEL条件式（trueの場合のみ適用）
+    - `value`: 静的な値（文字列、数値、真偽値など）
+    - `value_expr`: 実行時に評価されるCEL式
 
 ## CLI フラグと環境変数
 - `--config`: フォワーダー設定ファイルへのパス

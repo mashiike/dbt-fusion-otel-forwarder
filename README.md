@@ -36,10 +36,30 @@ forward:
         "service.name": "${DBT_OTEL_SERVICE_NAME:-dbt}"
     traces:
       exporters: [otlp]
+      attributes:
+        # Add static attribute
+        - action: set
+          key: "http.request.method"
+          value: "POST"
+
+        # Add dynamic attribute using CEL expression
+        - action: set
+          when: name.contains("Node evaluated")
+          key: "url.path"
+          value_expr: attributes["dbt.unique_id"]
+
+        # Remove sensitive attribute
+        - action: remove
+          key: "sensitive_data"
 ```
 
 - `exporters`: named OTLP exporters with per-signal overrides (protocol, gzip, headers, timeouts, user agent).
-- `forward`: routing rules; this project currently emits traces, but logs/metrics sections are parsed for future use.
+- `forward`: routing rules; this project currently emits traces and logs.
+  - `attributes`: modify span/log attributes using static values or CEL expressions.
+    - `action`: `set` (add/update) or `remove` (delete)
+    - `when`: optional CEL condition (only apply modifier if true)
+    - `value`: static value (string, number, boolean, etc.)
+    - `value_expr`: CEL expression evaluated at runtime
 
 ## CLI flags and environment
 - `--config`: Path to the forwarder config.
