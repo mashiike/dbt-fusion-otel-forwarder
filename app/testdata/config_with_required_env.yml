@@ -1,0 +1,11 @@
+exporters:
+  otlp:
+    type: otlp
+    endpoint: "${OTLP_ENDPOINT:?OTLP_ENDPOINT is required}"
+    headers:
+      "Authorization": "Bearer ${API_KEY:?API_KEY is required}"
+
+forward:
+  default:
+    traces:
+      exporters: [otlp]

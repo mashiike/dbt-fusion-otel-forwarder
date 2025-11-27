@@ -1,0 +1,12 @@
+exporters:
+  otlp:
+    type: otlp
+    endpoint: "${OTLP_ENDPOINT:-http://localhost:4317}"
+    headers:
+      "Authorization": "Bearer ${API_KEY:?API_KEY is required}"
+      "X-Custom-Header": "${CUSTOM_HEADER:-default-value}"
+
+forward:
+  default:
+    traces:
+      exporters: [otlp]

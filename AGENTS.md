@@ -18,14 +18,18 @@
 # 基本的な使い方
 ./dbt-fusion-otel-forwarder --config example.yml -- dbt build
 
-# example.yml の例（YAML/JSON 両対応、env テンプレート可）
+# example.yml の例（YAML/JSON 両対応、環境変数展開可）
+# 環境変数展開の書式:
+#   ${VAR}              - シンプルな変数展開
+#   ${VAR:-default}     - VARが未設定または空の場合にデフォルト値を使用
+#   ${VAR:?error msg}   - VARが未設定または空の場合にエラー
 exporters:
   otlp:
     type: otlp
-    endpoint: "http://localhost:4318"
+    endpoint: "${OTLP_ENDPOINT:-http://localhost:4318}"
     protocol: http/protobuf
     headers:
-      x-otlp-token: "{{ env \"OTLP_TOKEN\" }}"
+      x-otlp-token: "${OTLP_TOKEN:?OTLP_TOKEN is required}"
 
 forward:
   default:

@@ -6,7 +6,8 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"text/template"
+	"regexp"
+	"strings"
 
 	yaml "github.com/goccy/go-yaml"
 )
@@ -122,33 +123,51 @@ func loadConfig(path string) (io.Reader, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
-	tmpl := template.New("config").Funcs(
-		template.FuncMap{
-			"env": func(key string, args ...string) (string, error) {
-				if len(args) > 1 {
-					return "", fmt.Errorf("env: too many arguments")
-				}
-				if value, ok := os.LookupEnv(key); ok {
-					return value, nil
-				}
-				defaultValue := ""
-				if len(args) == 1 {
-					defaultValue = args[0]
-				}
-				return defaultValue, nil
-			},
-		},
-	).Option("missingkey=zero")
-	tmpl, err = tmpl.Parse(string(data))
+	expanded, err := expandWithDefaultAndError(string(data))
 	if err != nil {
-		// return original data if not a template
-		return bytes.NewReader(data), nil
+		return nil, fmt.Errorf("expand env vars in config: %w", err)
 	}
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, nil); err != nil {
-		return nil, fmt.Errorf("execute config template: %w", err)
-	}
-	return &buf, nil
+	return bytes.NewReader([]byte(expanded)), nil
+}
+
+var re = regexp.MustCompile(`\$\{([^}]+)\}`)
+
+func expandWithDefaultAndError(s string) (string, error) {
+	var firstErr error
+	result := re.ReplaceAllStringFunc(s, func(m string) string {
+		content := strings.TrimSuffix(strings.TrimPrefix(m, "${"), "}")
+
+		// ?:error
+		if parts := strings.SplitN(content, ":?", 2); len(parts) == 2 {
+			key := parts[0]
+			errMsg := parts[1]
+			val, ok := os.LookupEnv(key)
+			if !ok || val == "" {
+				if firstErr == nil {
+					firstErr = fmt.Errorf("%s", errMsg)
+				}
+				return ""
+			}
+			return val
+		}
+
+		// :-default
+		if parts := strings.SplitN(content, ":-", 2); len(parts) == 2 {
+			key := parts[0]
+			def := parts[1]
+			val, ok := os.LookupEnv(key)
+			if ok && val != "" {
+				return val
+			}
+			return def
+		}
+		if v, ok := os.LookupEnv(content); ok {
+			return v
+		}
+		return ""
+	})
+
+	return result, firstErr
 }
 
 func decocdeConfig(r io.Reader, v interface{}) error {
