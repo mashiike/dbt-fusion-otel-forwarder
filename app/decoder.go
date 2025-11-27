@@ -362,6 +362,21 @@ func parseNano(val string, fallback uint64) uint64 {
 	return n
 }
 
+func convertAttributesFromMap(obj map[string]any) []*commonpb.KeyValue {
+	attrs := make([]*commonpb.KeyValue, 0)
+	keys := make([]string, 0, len(obj))
+	for k := range obj {
+		keys = append(keys, k)
+	}
+	sortStrings(keys)
+
+	for _, k := range keys {
+		attrs = append(attrs, jsonValueToKeyValue(k, obj[k]))
+	}
+	return attrs
+}
+
+// Extract common attributes
 func extractAttributes(obj map[string]any, attrs []*commonpb.KeyValue) []*commonpb.KeyValue {
 	if obj == nil {
 		return attrs
@@ -371,15 +386,7 @@ func extractAttributes(obj map[string]any, attrs []*commonpb.KeyValue) []*common
 	// ignoring fields that are already represented in OTEL standard fields
 	if attrsObj, ok := obj["attributes"].(map[string]any); ok {
 		// Sort keys for deterministic output
-		keys := make([]string, 0, len(attrsObj))
-		for k := range attrsObj {
-			keys = append(keys, k)
-		}
-		sortStrings(keys)
-
-		for _, k := range keys {
-			attrs = append(attrs, jsonValueToKeyValue(k, attrsObj[k]))
-		}
+		attrs = append(attrs, convertAttributesFromMap(attrsObj)...)
 	}
 
 	// Also extract event_type as it's useful for correlation

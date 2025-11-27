@@ -2,14 +2,17 @@ package app
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"regexp"
 	"strings"
+	"time"
 
 	yaml "github.com/goccy/go-yaml"
+	"github.com/mashiike/go-otlp-helper/otlp"
 )
 
 type Config struct {
@@ -41,21 +44,112 @@ func (cfg *ExporterConfig) Validate() error {
 	return fmt.Errorf("type is not supported: %s", cfg.Type)
 }
 
+type OtlpExporterConfig struct {
+	Endpoint      string            `yaml:"endpoint"`
+	Protocol      string            `yaml:"protocol,omitempty"`       // "http/protobuf", "http/json", "grpc"
+	Gzip          *bool             `yaml:"gzip,omitempty"`           // Enable gzip compression
+	Headers       map[string]string `yaml:"headers,omitempty"`        // Custom headers
+	ExportTimeout *time.Duration    `yaml:"export_timeout,omitempty"` // Export timeout
+	UserAgent     string            `yaml:"user_agent,omitempty"`     // Custom user agent
+
+	// Per-signal configurations
+	Traces *OtlpSignalConfig `yaml:"traces,omitempty"`
+	Logs   *OtlpSignalConfig `yaml:"logs,omitempty"`
+}
+
+type OtlpSignalConfig struct {
+	Endpoint      string            `yaml:"endpoint,omitempty"`
+	Protocol      string            `yaml:"protocol,omitempty"`
+	Gzip          *bool             `yaml:"gzip,omitempty"`
+	Headers       map[string]string `yaml:"headers,omitempty"`
+	ExportTimeout *time.Duration    `yaml:"export_timeout,omitempty"`
+	UserAgent     string            `yaml:"user_agent,omitempty"`
+}
+
+func (cfg *OtlpExporterConfig) Validate() error {
+	if cfg.Endpoint == "" {
+		return errors.New("endpoint is required")
+	}
+	return nil
+}
+
+func (cfg *OtlpExporterConfig) ClientOptions() []otlp.ClientOption {
+	var opts []otlp.ClientOption
+
+	// Global options
+	if cfg.Protocol != "" {
+		opts = append(opts, otlp.WithProtocol(cfg.Protocol))
+	}
+	if cfg.Gzip != nil {
+		opts = append(opts, otlp.WithGzip(*cfg.Gzip))
+	}
+	if len(cfg.Headers) > 0 {
+		opts = append(opts, otlp.WithHeaders(cfg.Headers))
+	}
+	if cfg.ExportTimeout != nil {
+		opts = append(opts, otlp.WithExportTimeout(*cfg.ExportTimeout))
+	}
+	if cfg.UserAgent != "" {
+		opts = append(opts, otlp.WithUserAgent(cfg.UserAgent))
+	}
+
+	// Traces-specific options
+	if cfg.Traces != nil {
+		if cfg.Traces.Endpoint != "" {
+			opts = append(opts, otlp.WithTracesEndpoint(cfg.Traces.Endpoint))
+		}
+		if cfg.Traces.Protocol != "" {
+			opts = append(opts, otlp.WithTracesProtocol(cfg.Traces.Protocol))
+		}
+		if cfg.Traces.Gzip != nil {
+			opts = append(opts, otlp.WithTracesGzip(*cfg.Traces.Gzip))
+		}
+		if len(cfg.Traces.Headers) > 0 {
+			opts = append(opts, otlp.WithTracesHeaders(cfg.Traces.Headers))
+		}
+		if cfg.Traces.ExportTimeout != nil {
+			opts = append(opts, otlp.WithTracesExportTimeout(*cfg.Traces.ExportTimeout))
+		}
+		if cfg.Traces.UserAgent != "" {
+			opts = append(opts, otlp.WithTracesUserAgent(cfg.Traces.UserAgent))
+		}
+	}
+
+	// Logs-specific options
+	if cfg.Logs != nil {
+		if cfg.Logs.Endpoint != "" {
+			opts = append(opts, otlp.WithLogsEndpoint(cfg.Logs.Endpoint))
+		}
+		if cfg.Logs.Protocol != "" {
+			opts = append(opts, otlp.WithLogsProtocol(cfg.Logs.Protocol))
+		}
+		if cfg.Logs.Gzip != nil {
+			opts = append(opts, otlp.WithLogsGzip(*cfg.Logs.Gzip))
+		}
+		if len(cfg.Logs.Headers) > 0 {
+			opts = append(opts, otlp.WithLogsHeaders(cfg.Logs.Headers))
+		}
+		if cfg.Logs.ExportTimeout != nil {
+			opts = append(opts, otlp.WithLogsExportTimeout(*cfg.Logs.ExportTimeout))
+		}
+		if cfg.Logs.UserAgent != "" {
+			opts = append(opts, otlp.WithLogsUserAgent(cfg.Logs.UserAgent))
+		}
+	}
+
+	return opts
+}
+
 type ForwardConfig struct {
-	Traces  *TracesForwardConfig  `yaml:"traces,omitempty"`
-	Metrics *MetricsForwardConfig `yaml:"metrics,omitempty"`
-	Logs    *LogsForwardConfig    `yaml:"logs,omitempty"`
+	Resource *ForwardResourceConfig `yaml:"resource,omitempty"`
+	Traces   *TracesForwardConfig   `yaml:"traces,omitempty"`
+	Logs     *LogsForwardConfig     `yaml:"logs,omitempty"`
 }
 
 func (cfg *ForwardConfig) Validate(exporters map[string]ExporterConfig) error {
 	if cfg.Traces != nil {
 		if err := cfg.Traces.Validate(exporters); err != nil {
 			return fmt.Errorf("traces.%w", err)
-		}
-	}
-	if cfg.Metrics != nil {
-		if err := cfg.Metrics.Validate(exporters); err != nil {
-			return fmt.Errorf("metrics.%w", err)
 		}
 	}
 	if cfg.Logs != nil {
@@ -66,8 +160,42 @@ func (cfg *ForwardConfig) Validate(exporters map[string]ExporterConfig) error {
 	return nil
 }
 
+type AttributeModifierConfig struct {
+	Action    string  `yaml:"action"` // "set", "remove"
+	When      *string `yaml:"when"`
+	Key       string  `yaml:"key"`
+	Value     any     `yaml:"value"`
+	ValueExpr string  `yaml:"value_expr,omitempty"`
+}
+
+func (cfg *AttributeModifierConfig) Validate() error {
+	if cfg.Action == "" {
+		cfg.Action = "set"
+	}
+	if cfg.Action != "set" && cfg.Action != "remove" {
+		return fmt.Errorf("action must be one of 'set', 'remove'")
+	}
+	if cfg.Key == "" {
+		return fmt.Errorf("key is required")
+	}
+	if cfg.Action == "set" {
+		if cfg.Value == nil && cfg.ValueExpr == "" {
+			return errors.New("either value or value_expr must be set")
+		}
+		if cfg.ValueExpr != "" && cfg.Value != nil {
+			return errors.New("cannot both value and value_expr be set")
+		}
+	}
+	return nil
+}
+
+type ForwardResourceConfig struct {
+	Attributes map[string]any `yaml:"attributes"`
+}
+
 type TracesForwardConfig struct {
-	Exporters []string `yaml:"exporters"`
+	Attributes []AttributeModifierConfig `yaml:"attributes,omitempty"`
+	Exporters  []string                  `yaml:"exporters"`
 }
 
 func (cfg *TracesForwardConfig) Validate(exporters map[string]ExporterConfig) error {
@@ -76,30 +204,28 @@ func (cfg *TracesForwardConfig) Validate(exporters map[string]ExporterConfig) er
 			return fmt.Errorf("traces exporter %s is not defined", name)
 		}
 	}
-	return nil
-}
-
-type MetricsForwardConfig struct {
-	Exporters []string `yaml:"exporters"`
-}
-
-func (cfg *MetricsForwardConfig) Validate(exporters map[string]ExporterConfig) error {
-	for _, name := range cfg.Exporters {
-		if _, ok := exporters[name]; !ok {
-			return fmt.Errorf("metrics exporter %s is not defined", name)
+	for _, attrMod := range cfg.Attributes {
+		if err := attrMod.Validate(); err != nil {
+			return fmt.Errorf("invalid trace attribute modifier: %w", err)
 		}
 	}
 	return nil
 }
 
 type LogsForwardConfig struct {
-	Exporters []string `yaml:"exporters"`
+	Attributes []AttributeModifierConfig `yaml:"attributes,omitempty"`
+	Exporters  []string                  `yaml:"exporters"`
 }
 
 func (cfg *LogsForwardConfig) Validate(exporters map[string]ExporterConfig) error {
 	for _, name := range cfg.Exporters {
 		if _, ok := exporters[name]; !ok {
 			return fmt.Errorf("logs exporter %s is not defined", name)
+		}
+	}
+	for _, attrMod := range cfg.Attributes {
+		if err := attrMod.Validate(); err != nil {
+			return fmt.Errorf("invalid log attribute modifier: %w", err)
 		}
 	}
 	return nil

@@ -35,7 +35,72 @@ forward:
   default:
     traces:
       exporters: [otlp]
+      attributes:
+        # 静的な値で属性を設定
+        - action: set
+          key: "http.request.method"
+          value: "POST"
+
+        # CEL式を使った動的な属性設定
+        - action: set
+          when: name.contains("Node evaluated")
+          key: "url.path"
+          value_expr: attributes["dbt.unique_id"]
+
+        # 条件付きでHTTPステータスコードを設定
+        - action: set
+          when: name.contains("Node evaluated")
+          key: "http.response.status_code"
+          value_expr: |
+            status.code == "ERROR" ? 500 : 200
 ```
+
+### 属性変更機能
+
+スパンやログの属性を動的に追加・削除・変更できます：
+
+**静的な値の設定** (`value`):
+```yaml
+- action: set
+  key: "environment"
+  value: "production"
+```
+
+**CEL式による動的な値** (`value_expr`):
+```yaml
+- action: set
+  key: "computed_field"
+  value_expr: '"prefix_" + name'
+```
+
+**条件付き変更** (`when`):
+```yaml
+- action: set
+  when: severityText == "ERROR"
+  key: "alert"
+  value: true
+```
+
+**属性の削除**:
+```yaml
+- action: remove
+  key: "sensitive_data"
+```
+
+**利用可能なCEL変数**:
+
+Span用:
+- `traceId`, `spanId`, `parentSpanId`, `name`, `traceState`
+- `startTimeUnixNano`, `endTimeUnixNano`
+- `attributes` (map), `status` (map), `kind` (string)
+- `events` (list), `links` (list)
+
+Log用:
+- `traceId`, `spanId`, `timeUnixNano`, `observedTimeUnixNano`
+- `severityNumber` (int), `severityText` (string)
+- `body` (any), `attributes` (map)
+
+詳細は [app/cel.go](app/cel.go) を参照。
 
 1. dbt コマンドを実行
 2. OTEL ログファイル生成を短時間待機し、存在すればリアルタイムで tail
@@ -151,12 +216,17 @@ dbt build --otel-file-name otel.jsonl --log-path logs
 # ビルド
 go build ./...
 
+# テスト（race detectorを有効にする）
+go test -race ./...
+
 # 静的解析
 go vet ./...
 
 # 実行例（デバッグログ有効）
 go run . --log-level debug --config example.yml -- dbt build
 ```
+
+**重要**: テストは必ず `-race` オプション付きで実行してください。このプロジェクトは並行処理を多用するため、データ競合の検出が不可欠です。
 
 ### デバッグログの確認
 
