@@ -53,13 +53,13 @@ func TestDecodeOTELLines_FailedSpans(t *testing.T) {
 
 		t.Logf("decoded %d spans and %d logs", len(spans), len(logs))
 
-		// Serialize spans to JSONL
-		spansJSON := serializeSpansToJSONL(t, spans)
-		g.Assert(t, "decode_without_cutoff_failed.spans", spansJSON)
+		// Serialize spans to JSON array
+		spansJSON := serializeSpansToJSON(t, spans)
+		g.AssertJson(t, "decode_without_cutoff_failed.spans", spansJSON)
 
-		// Serialize logs to JSONL
-		logsJSON := serializeLogsToJSONL(t, logs)
-		g.Assert(t, "decode_without_cutoff_failed.logs", logsJSON)
+		// Serialize logs to JSON array
+		logsJSON := serializeLogsToJSON(t, logs)
+		g.AssertJson(t, "decode_without_cutoff_failed.logs", logsJSON)
 	})
 
 }
@@ -104,13 +104,13 @@ func TestDecodeOTELLines(t *testing.T) {
 
 		t.Logf("decoded %d spans and %d logs", len(spans), len(logs))
 
-		// Serialize spans to JSONL
-		spansJSON := serializeSpansToJSONL(t, spans)
-		g.Assert(t, "decode_without_cutoff.spans", spansJSON)
+		// Serialize spans to JSON array
+		spansJSON := serializeSpansToJSON(t, spans)
+		g.AssertJson(t, "decode_without_cutoff.spans", spansJSON)
 
-		// Serialize logs to JSONL
-		logsJSON := serializeLogsToJSONL(t, logs)
-		g.Assert(t, "decode_without_cutoff.logs", logsJSON)
+		// Serialize logs to JSON array
+		logsJSON := serializeLogsToJSON(t, logs)
+		g.AssertJson(t, "decode_without_cutoff.logs", logsJSON)
 	})
 
 	t.Run("decode with cutoff", func(t *testing.T) {
@@ -168,11 +168,11 @@ func TestDecodeOTELLines(t *testing.T) {
 			len(allSpans), len(spans), len(allLogs), len(logs))
 
 		// Serialize and compare with golden file
-		spansJSON := serializeSpansToJSONL(t, spans)
-		g.Assert(t, "decode_with_partial_cutoff.spans", spansJSON)
+		spansJSON := serializeSpansToJSON(t, spans)
+		g.AssertJson(t, "decode_with_partial_cutoff.spans", spansJSON)
 
-		logsJSON := serializeLogsToJSONL(t, logs)
-		g.Assert(t, "decode_with_partial_cutoff.logs", logsJSON)
+		logsJSON := serializeLogsToJSON(t, logs)
+		g.AssertJson(t, "decode_with_partial_cutoff.logs", logsJSON)
 	})
 
 	t.Run("empty input", func(t *testing.T) {
@@ -214,42 +214,56 @@ func decodeOTELLines(lines []string, cutoffTimeNano uint64) ([]*tracepb.Span, []
 	return decoder.DecodeLines(lines)
 }
 
-// serializeSpansToJSONL converts spans to JSONL format using protojson
-func serializeSpansToJSONL(t *testing.T, spans []*tracepb.Span) []byte {
+// serializeSpansToJSON converts spans to JSON array format using protojson
+func serializeSpansToJSON(t *testing.T, spans []*tracepb.Span) []byte {
 	t.Helper()
-	var result []byte
+	if len(spans) == 0 {
+		return []byte("[]")
+	}
 	marshaler := protojson.MarshalOptions{
 		Multiline:       false,
 		Indent:          "",
 		EmitUnpopulated: false,
 	}
+	var jsonArray []string
 	for _, span := range spans {
 		jsonBytes, err := marshaler.Marshal(span)
 		if err != nil {
 			t.Fatalf("failed to marshal span: %v", err)
 		}
-		result = append(result, jsonBytes...)
-		result = append(result, '\n')
+		jsonArray = append(jsonArray, string(jsonBytes))
 	}
-	return result
+	result := "[" + jsonArray[0]
+	for i := 1; i < len(jsonArray); i++ {
+		result += "," + jsonArray[i]
+	}
+	result += "]"
+	return []byte(result)
 }
 
-// serializeLogsToJSONL converts log records to JSONL format using protojson
-func serializeLogsToJSONL(t *testing.T, logs []*logspb.LogRecord) []byte {
+// serializeLogsToJSON converts log records to JSON array format using protojson
+func serializeLogsToJSON(t *testing.T, logs []*logspb.LogRecord) []byte {
 	t.Helper()
-	var result []byte
+	if len(logs) == 0 {
+		return []byte("[]")
+	}
 	marshaler := protojson.MarshalOptions{
 		Multiline:       false,
 		Indent:          "",
 		EmitUnpopulated: false,
 	}
+	var jsonArray []string
 	for _, log := range logs {
 		jsonBytes, err := marshaler.Marshal(log)
 		if err != nil {
 			t.Fatalf("failed to marshal log: %v", err)
 		}
-		result = append(result, jsonBytes...)
-		result = append(result, '\n')
+		jsonArray = append(jsonArray, string(jsonBytes))
 	}
-	return result
+	result := "[" + jsonArray[0]
+	for i := 1; i < len(jsonArray); i++ {
+		result += "," + jsonArray[i]
+	}
+	result += "]"
+	return []byte(result)
 }
