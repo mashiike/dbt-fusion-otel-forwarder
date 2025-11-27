@@ -31,6 +31,9 @@ exporters:
 
 forward:
   default:
+    resource:
+      attributes:
+        "service.name": "${DBT_OTEL_SERVICE_NAME:-dbt}"
     traces:
       exporters: [otlp]
 ```

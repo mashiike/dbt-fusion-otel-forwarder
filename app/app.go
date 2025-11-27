@@ -3,7 +3,6 @@ package app
 import (
 	"bufio"
 	"context"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
@@ -15,7 +14,7 @@ import (
 	"time"
 
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
-	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
+	logspb "go.opentelemetry.io/proto/otlp/logs/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 )
 
@@ -25,7 +24,6 @@ type RunParams struct {
 	OtelFile     string
 	TargetCmd    []string
 	FlushTimeout time.Duration
-	ServiceName  string
 }
 
 // App owns the application lifecycle for the dbt OTEL forwarder.
@@ -222,15 +220,14 @@ func (a *App) tailOTELFile(ctx context.Context, path string, lines chan<- string
 
 // flushAndUpload reads lines from channel, buffers them, and periodically uploads traces.
 func (a *App) flushAndUpload(ctx context.Context, lines <-chan string, srcPath string, cutoffTimeNano uint64, params RunParams) error {
-	forwarder := NewForwarder(ctx, a.cfg)
-	if err := forwarder.Start(context.WithoutCancel(ctx)); err != nil {
-		return fmt.Errorf("start forwarder: %w", err)
-	}
+	forwarders := NewForwarders(ctx, a.cfg)
 	defer func() {
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer stopCancel()
-		if err := forwarder.Stop(stopCtx); err != nil {
-			a.Logger.Warn("failed to stop forwarder", "error", err)
+		for _, forwarder := range forwarders {
+			if err := forwarder.Stop(stopCtx); err != nil {
+				a.Logger.Warn("failed to stop forwarder", "error", err)
+			}
 		}
 	}()
 
@@ -244,7 +241,6 @@ func (a *App) flushAndUpload(ctx context.Context, lines <-chan string, srcPath s
 		if len(buffer) == 0 {
 			return
 		}
-
 		a.Logger.Debug("flushing buffer", "line_count", len(buffer))
 
 		spans, logs, err := decoder.DecodeLines(buffer)
@@ -258,64 +254,56 @@ func (a *App) flushAndUpload(ctx context.Context, lines <-chan string, srcPath s
 
 		a.Logger.Debug("decoded results", "span_count", len(spans), "log_count", len(logs))
 
-		if len(logs) > 0 {
-			a.Logger.Debug("logs decoded but not yet handled", "count", len(logs))
-		}
-
-		if len(spans) == 0 {
-			a.Logger.Debug("no spans decoded from buffer")
+		if len(logs) == 0 && len(spans) == 0 {
+			a.Logger.Debug("no spans or logs decoded from buffer")
 			buffer = buffer[:0]
 			return
 		}
-
-		// Log span details for debugging
-		for i, span := range spans {
-			a.Logger.Debug("decoded span",
-				"index", i,
-				"name", span.Name,
-				"trace_id", hex.EncodeToString(span.TraceId),
-				"span_id", hex.EncodeToString(span.SpanId),
-				"parent_span_id", hex.EncodeToString(span.ParentSpanId),
-				"start_time", span.StartTimeUnixNano,
-				"end_time", span.EndTimeUnixNano,
-			)
-		}
-
-		a.Logger.Debug("uploading traces", "span_count", len(spans))
-
-		td := &tracepb.TracesData{
-			ResourceSpans: []*tracepb.ResourceSpans{
-				{
-					Resource: &resourcepb.Resource{
-						Attributes: []*commonpb.KeyValue{
-							{Key: "service.name", Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: params.ServiceName}}},
-							{Key: "dbt.otel.source", Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: srcPath}}},
-						},
-					},
-					ScopeSpans: []*tracepb.ScopeSpans{
-						{
-							Scope: &commonpb.InstrumentationScope{
-								Name:    "dbt-fusion-otel-forwarder",
-								Version: "0.0.0",
-							},
-							Spans: spans,
-						},
-					},
-				},
-			},
-		}
-
+		var wg sync.WaitGroup
 		uploadCtxWithTimeout, uploadCancel := context.WithTimeout(context.Background(), params.FlushTimeout)
 		defer uploadCancel()
-
-		if err := forwarder.UploadTraces(uploadCtxWithTimeout, td.ResourceSpans); err != nil {
-			a.Logger.Warn("failed to upload traces", "error", err, "span_count", len(spans))
-			// Don't return error, just log and continue
-			buffer = buffer[:0]
-			return
+		if len(logs) > 0 {
+			a.Logger.Debug("logs decoded but not yet handled", "count", len(logs))
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for _, forwarder := range forwarders {
+					if err := forwarder.UploadLogs(uploadCtxWithTimeout, &logspb.ScopeLogs{
+						Scope: &commonpb.InstrumentationScope{
+							Name:    "dbt-fusion-otel-forwarder",
+							Version: Version,
+						},
+						LogRecords: logs,
+					}); err != nil {
+						a.Logger.Warn("failed to upload logs", "error", err, "log_count", len(logs))
+					} else {
+						a.Logger.Debug("logs uploaded successfully", "log_count", len(logs))
+					}
+				}
+			}()
 		}
 
-		a.Logger.Debug("traces uploaded successfully", "span_count", len(spans))
+		if len(spans) > 0 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for _, forwarder := range forwarders {
+					if err := forwarder.UploadTraces(uploadCtxWithTimeout, &tracepb.ScopeSpans{
+						Scope: &commonpb.InstrumentationScope{
+							Name:    "dbt-fusion-otel-forwarder",
+							Version: Version,
+						},
+						Spans: spans,
+					}); err != nil {
+						a.Logger.Warn("failed to upload traces", "error", err, "span_count", len(spans))
+					} else {
+						a.Logger.Debug("traces uploaded successfully", "span_count", len(spans))
+					}
+				}
+			}()
+		}
+		wg.Wait()
+		a.Logger.Debug("upload telemetry successfully", "span_count", len(spans), "log_count", len(logs))
 		buffer = buffer[:0]
 	}
 

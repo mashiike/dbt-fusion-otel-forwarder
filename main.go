@@ -13,8 +13,6 @@ import (
 	"github.com/mashiike/dbt-fusion-otel-forwarder/app"
 )
 
-var Version = "v0.1.0"
-
 func main() {
 	if code := run(); code != 0 {
 		os.Exit(code)
@@ -30,7 +28,6 @@ func run() int {
 		otelFile     = getenv("DBT_OTEL_FILE_NAME", "otel.jsonl")
 		logFmt       = getenv("LOG_FORMAT", "json")
 		logLevel     = getenv("LOG_LEVEL", "info")
-		serviceName  = getenv("DBT_OTEL_SERVICE_NAME", "dbt")
 		flushTimeout = getenv("DBT_OTEL_FLUSH_TIMEOUT", "5m")
 		config       = getenv("DBT_OTEL_FORWARDER_CONFIG", "dbt-fusion-otel-forwarder-config.yml")
 	)
@@ -39,7 +36,6 @@ func run() int {
 	fs.StringVar(&config, "config", config, "Path to forward config (JSON)")
 	fs.StringVar(&logLevel, "log-level", logLevel, "Log level (debug, info, warn, error). Default from LOG_LEVEL or info")
 	fs.StringVar(&logFmt, "log-format", logFmt, "Log format (json or text). Default from LOG_FORMAT or json")
-	fs.StringVar(&serviceName, "service-name", serviceName, "Service name for OTEL traces. Default from DBT_OTEL_SERVICE_NAME or dbt")
 	fs.StringVar(&flushTimeout, "flush-timeout", flushTimeout, "Maximum time to wait for flushing OTEL data on exit. Default from DBT_OTEL_FLUSH_TIMEOUT or 5m")
 	if err := parse(); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to parse flags: %v\n", err)
@@ -62,7 +58,7 @@ func run() int {
 	default:
 		logger = slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: minLevel}))
 	}
-	logger = logger.With("app", appName, "version", Version)
+	logger = logger.With("app", appName, "version", app.Version)
 	for _, warning := range warnings {
 		logger.Warn(warning)
 	}
@@ -100,7 +96,6 @@ func run() int {
 		LogPath:      logDir,
 		OtelFile:     otelFile,
 		TargetCmd:    targetArgs,
-		ServiceName:  serviceName,
 		FlushTimeout: flushTimeoutDuration,
 	}
 

@@ -34,6 +34,9 @@ exporters:
 
 forward:
   default:
+    resource:
+      attributes:
+        "service.name": "${DBT_OTEL_SERVICE_NAME:-dbt}"
     traces:
       exporters: [otlp]
 ```
@@ -45,7 +48,6 @@ forward:
 - `--config`: フォワーダー設定ファイルへのパス
 - `--log-path`: dbt のログディレクトリ（`DBT_LOG_PATH` または `logs`）
 - `--otel-file`: OTEL ログファイル名（`DBT_OTEL_FILE_NAME` または `otel.jsonl`）
-- `--service-name`: OTLP 送信時の `service.name`（`DBT_OTEL_SERVICE_NAME` または `dbt`）
 - `--flush-timeout`: 終了時にアップロードを待つ上限時間（`DBT_OTEL_FLUSH_TIMEOUT` または `5m`）
 - `--log-level` / `--log-format`: ラッパー自身のログ設定（`json` or `text`）
 - `--` 以降は dbt コマンドとして実行。上記の環境変数が未設定ならラッパーが設定して渡します。
