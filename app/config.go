@@ -183,7 +183,7 @@ func (cfg *AttributeModifierConfig) Validate() error {
 			return errors.New("either value or value_expr must be set")
 		}
 		if cfg.ValueExpr != "" && cfg.Value != nil {
-			return errors.New("cannnot both value and value_expr be set")
+			return errors.New("cannot both value and value_expr be set")
 		}
 	}
 	return nil

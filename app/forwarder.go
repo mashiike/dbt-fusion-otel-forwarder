@@ -12,14 +12,13 @@ import (
 )
 
 type Forwarder struct {
-	name                     string
-	resourceAttributes       []*commonpb.KeyValue
-	cfg                      ForwardConfig
-	logsExporter             Exporter
-	tracesExporter           Exporter
-	spanAttributeModifiers   []*attributeModifier
-	logAttributeModifiers    []*attributeModifier
-	metricAttributeModifiers []*attributeModifier
+	name                   string
+	resourceAttributes     []*commonpb.KeyValue
+	cfg                    ForwardConfig
+	logsExporter           Exporter
+	tracesExporter         Exporter
+	spanAttributeModifiers []*attributeModifier
+	logAttributeModifiers  []*attributeModifier
 }
 
 func NewForwarder(name string, cfg ForwardConfig, exporters map[string]Exporter) (*Forwarder, error) {
