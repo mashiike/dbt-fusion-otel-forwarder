@@ -1,5 +1,8 @@
 # Changelog
 
+## [v0.3.0](https://github.com/mashiike/dbt-fusion-otel-forwarder/compare/v0.2.0...v0.3.0) - 2025-12-01
+- feat: Generate OpenTelemetry exception events for dbt failures by @mashiike in https://github.com/mashiike/dbt-fusion-otel-forwarder/pull/10
+
 ## [v0.2.0](https://github.com/mashiike/dbt-fusion-otel-forwarder/compare/v0.1.0...v0.2.0) - 2025-11-27
 - Improve environment variable expansion and test stability by @mashiike in https://github.com/mashiike/dbt-fusion-otel-forwarder/pull/7
 - docs: document attribute modifier feature and testing requirements by @mashiike in https://github.com/mashiike/dbt-fusion-otel-forwarder/pull/9
