@@ -22,6 +22,7 @@ type spanPartial struct {
 	start         uint64
 	end           uint64
 	attrs         []*commonpb.KeyValue
+	events        []*tracepb.Span_Event
 	statusCode    tracepb.Status_StatusCode
 	statusMessage string
 }
@@ -126,11 +127,17 @@ func (d *Decoder) DecodeLines(lines []string) ([]*tracepb.Span, []*logspb.LogRec
 					p.start = parseNano(start, uint64(time.Now().UnixNano()))
 				}
 				p.attrs = extractAttributes(obj, p.attrs)
+				if events := extractEvents(obj); len(events) > 0 {
+					p.events = append(p.events, events...)
+				}
 			} else { // SpanEnd
 				if end := stringFrom(obj, "end_time_unix_nano"); end != "" {
 					p.end = parseNano(end, p.start)
 				}
 				p.attrs = extractAttributes(obj, p.attrs)
+				if events := extractEvents(obj); len(events) > 0 {
+					p.events = append(p.events, events...)
+				}
 
 				// Extract status information from SpanEnd
 				if statusObj, ok := obj["status"].(map[string]any); ok {
@@ -142,14 +149,126 @@ func (d *Decoder) DecodeLines(lines []string) ([]*tracepb.Span, []*logspb.LogRec
 					}
 				}
 
-				// Check for test failure in node_test_detail
+				// Check for exception events and set ERROR status
+				for _, event := range p.events {
+					if event.Name == "exception" {
+						if p.statusCode == tracepb.Status_STATUS_CODE_UNSET {
+							p.statusCode = tracepb.Status_STATUS_CODE_ERROR
+						}
+						// Extract exception.message for status message if available
+						if p.statusMessage == "" {
+							for _, attr := range event.Attributes {
+								if attr.Key == "exception.message" {
+									if strVal, ok := attr.Value.Value.(*commonpb.AnyValue_StringValue); ok {
+										p.statusMessage = strVal.StringValue
+										break
+									}
+								}
+							}
+						}
+						break
+					}
+				}
+
+				// Check for test failure in node_test_detail and create exception event
 				if attrsObj, ok := obj["attributes"].(map[string]any); ok {
 					if testDetail, ok := attrsObj["node_test_detail"].(map[string]any); ok {
 						if outcome := stringFrom(testDetail, "test_outcome"); outcome == "TEST_OUTCOME_FAILED" {
+							// Create exception event for test failure
+							exceptionAttrs := []*commonpb.KeyValue{
+								{
+									Key:   "exception.type",
+									Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: "dbt.TestFailure"}},
+								},
+							}
+
+							// Build exception message with unique_id
+							failingRows := getInt(testDetail, "failing_rows")
+							uniqueID := stringFrom(attrsObj, "unique_id")
+							exceptionMsg := fmt.Sprintf("Test failed with %d failing rows", failingRows)
+							if uniqueID != "" {
+								exceptionMsg = fmt.Sprintf("Test '%s' failed with %d failing rows", uniqueID, failingRows)
+							}
+
+							exceptionAttrs = append(exceptionAttrs, &commonpb.KeyValue{
+								Key:   "exception.message",
+								Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: exceptionMsg}},
+							})
+
+							// Add failing_rows as additional context
+							if failingRows > 0 {
+								exceptionAttrs = append(exceptionAttrs, &commonpb.KeyValue{
+									Key:   "dbt.test.failing_rows",
+									Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: int64(failingRows)}},
+								})
+							}
+
+							exceptionEvent := &tracepb.Span_Event{
+								Name:         "exception",
+								TimeUnixNano: p.end,
+								Attributes:   exceptionAttrs,
+							}
+							p.events = append(p.events, exceptionEvent)
+
 							p.statusCode = tracepb.Status_STATUS_CODE_ERROR
 							if p.statusMessage == "" {
-								p.statusMessage = "Test failed"
+								p.statusMessage = exceptionMsg
 							}
+						}
+					}
+
+					// Check for Node Evaluated failure and create exception event
+					if nodeOutcome := stringFrom(attrsObj, "node_outcome"); nodeOutcome != "" && nodeOutcome != "NODE_OUTCOME_SUCCESS" {
+						// Create exception event for node evaluation failure
+						exceptionAttrs := []*commonpb.KeyValue{
+							{
+								Key:   "exception.type",
+								Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: "dbt.NodeEvaluationFailure"}},
+							},
+						}
+
+						// Build exception message
+						nodeType := stringFrom(attrsObj, "node_type")
+						nodeName := stringFrom(attrsObj, "name")
+						uniqueID := stringFrom(attrsObj, "unique_id")
+						exceptionMsg := fmt.Sprintf("Node evaluation failed: %s (outcome: %s)", uniqueID, nodeOutcome)
+						if nodeName != "" {
+							exceptionMsg = fmt.Sprintf("Node '%s' evaluation failed (outcome: %s)", nodeName, nodeOutcome)
+						}
+
+						exceptionAttrs = append(exceptionAttrs, &commonpb.KeyValue{
+							Key:   "exception.message",
+							Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: exceptionMsg}},
+						})
+
+						// Add node details as additional context
+						if nodeType != "" {
+							exceptionAttrs = append(exceptionAttrs, &commonpb.KeyValue{
+								Key:   "dbt.node.type",
+								Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: nodeType}},
+							})
+						}
+						if uniqueID != "" {
+							exceptionAttrs = append(exceptionAttrs, &commonpb.KeyValue{
+								Key:   "dbt.node.unique_id",
+								Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: uniqueID}},
+							})
+						}
+						exceptionAttrs = append(exceptionAttrs, &commonpb.KeyValue{
+							Key:   "dbt.node.outcome",
+							Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: nodeOutcome}},
+						})
+
+						exceptionEvent := &tracepb.Span_Event{
+							Name:         "exception",
+							TimeUnixNano: p.end,
+							Attributes:   exceptionAttrs,
+						}
+						p.events = append(p.events, exceptionEvent)
+
+						p.statusCode = tracepb.Status_STATUS_CODE_ERROR
+						if p.statusMessage == "" {
+							p.statusMessage = exceptionMsg
 						}
 					}
 				}
@@ -216,6 +335,7 @@ func (d *Decoder) buildSpan(p *spanPartial) *tracepb.Span {
 		StartTimeUnixNano: p.start,
 		EndTimeUnixNano:   p.end,
 		Attributes:        deduplicateAttributes(p.attrs),
+		Events:            p.events,
 	}
 
 	// If end time is not set, use start time
@@ -400,6 +520,44 @@ func extractAttributes(obj map[string]any, attrs []*commonpb.KeyValue) []*common
 	}
 
 	return attrs
+}
+
+// extractEvents extracts span events from the JSON object
+func extractEvents(obj map[string]any) []*tracepb.Span_Event {
+	if obj == nil {
+		return nil
+	}
+
+	eventsArray, ok := obj["events"].([]any)
+	if !ok {
+		return nil
+	}
+
+	events := make([]*tracepb.Span_Event, 0, len(eventsArray))
+	for _, eventItem := range eventsArray {
+		eventObj, ok := eventItem.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		event := &tracepb.Span_Event{
+			Name: stringFrom(eventObj, "name"),
+		}
+
+		// Extract time_unix_nano
+		if timeStr := stringFrom(eventObj, "time_unix_nano"); timeStr != "" {
+			event.TimeUnixNano = parseNano(timeStr, 0)
+		}
+
+		// Extract attributes
+		if attrsObj, ok := eventObj["attributes"].(map[string]any); ok {
+			event.Attributes = convertAttributesFromMap(attrsObj)
+		}
+
+		events = append(events, event)
+	}
+
+	return events
 }
 
 // jsonValueToKeyValue converts a JSON value to an OTEL KeyValue
