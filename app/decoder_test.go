@@ -210,6 +210,84 @@ func TestDecodeOTELLines(t *testing.T) {
 	})
 }
 
+func TestDecodeLines_SkippedNodeOutcomeIsNotError(t *testing.T) {
+	// NODE_OUTCOME_SKIPPED (e.g. ephemeral model with NO_OP) should not be treated as an error
+	lines := []string{
+		`{"record_type":"SpanStart","trace_id":"00000000000000000000000000000001","span_id":"0000000000000001","span_name":"Node evaluated (skipped_model)","start_time_unix_nano":"1000000000","attributes":{"name":"skipped_model","unique_id":"model.test.skipped_model","node_type":"NODE_TYPE_MODEL","node_outcome":"NODE_OUTCOME_SKIPPED","node_skip_reason":"NODE_SKIP_REASON_NO_OP"}}`,
+		`{"record_type":"SpanEnd","trace_id":"00000000000000000000000000000001","span_id":"0000000000000001","end_time_unix_nano":"2000000000","attributes":{"name":"skipped_model","unique_id":"model.test.skipped_model","node_type":"NODE_TYPE_MODEL","node_outcome":"NODE_OUTCOME_SKIPPED","node_skip_reason":"NODE_SKIP_REASON_NO_OP"}}`,
+	}
+
+	spans, _, err := decodeOTELLines(lines, 0)
+	if err != nil {
+		t.Fatalf("decodeOTELLines failed: %v", err)
+	}
+	if len(spans) != 1 {
+		t.Fatalf("expected 1 span, got %d", len(spans))
+	}
+
+	span := spans[0]
+	if span.Status != nil {
+		t.Errorf("expected no status (non-error), got code=%v message=%q", span.Status.Code, span.Status.Message)
+	}
+	for _, event := range span.Events {
+		if event.Name == "exception" {
+			t.Errorf("expected no exception event for SKIPPED outcome, but found one")
+		}
+	}
+}
+
+func TestDecodeLines_ErrorNodeOutcomeIsError(t *testing.T) {
+	// NODE_OUTCOME_ERROR should still be treated as an error
+	lines := []string{
+		`{"record_type":"SpanStart","trace_id":"00000000000000000000000000000002","span_id":"0000000000000002","span_name":"Node evaluated (error_model)","start_time_unix_nano":"1000000000","attributes":{"name":"error_model","unique_id":"model.test.error_model","node_type":"NODE_TYPE_MODEL"}}`,
+		`{"record_type":"SpanEnd","trace_id":"00000000000000000000000000000002","span_id":"0000000000000002","end_time_unix_nano":"2000000000","attributes":{"name":"error_model","unique_id":"model.test.error_model","node_type":"NODE_TYPE_MODEL","node_outcome":"NODE_OUTCOME_ERROR"}}`,
+	}
+
+	spans, _, err := decodeOTELLines(lines, 0)
+	if err != nil {
+		t.Fatalf("decodeOTELLines failed: %v", err)
+	}
+	if len(spans) != 1 {
+		t.Fatalf("expected 1 span, got %d", len(spans))
+	}
+
+	span := spans[0]
+	if span.Status == nil || span.Status.Code != tracepb.Status_STATUS_CODE_ERROR {
+		t.Errorf("expected ERROR status for NODE_OUTCOME_ERROR, got %v", span.Status)
+	}
+
+	hasException := false
+	for _, event := range span.Events {
+		if event.Name == "exception" {
+			hasException = true
+		}
+	}
+	if !hasException {
+		t.Errorf("expected exception event for NODE_OUTCOME_ERROR, but found none")
+	}
+}
+
+func TestDecodeLines_UnknownNodeOutcomeIsError(t *testing.T) {
+	// Unknown/future outcome values should be treated as errors (allowlist approach)
+	lines := []string{
+		`{"record_type":"SpanStart","trace_id":"00000000000000000000000000000003","span_id":"0000000000000003","span_name":"Node evaluated (unknown_model)","start_time_unix_nano":"1000000000","attributes":{"name":"unknown_model","unique_id":"model.test.unknown_model","node_type":"NODE_TYPE_MODEL"}}`,
+		`{"record_type":"SpanEnd","trace_id":"00000000000000000000000000000003","span_id":"0000000000000003","end_time_unix_nano":"2000000000","attributes":{"name":"unknown_model","unique_id":"model.test.unknown_model","node_type":"NODE_TYPE_MODEL","node_outcome":"NODE_OUTCOME_UNKNOWN_FUTURE_VALUE"}}`,
+	}
+
+	spans, _, err := decodeOTELLines(lines, 0)
+	if err != nil {
+		t.Fatalf("decodeOTELLines failed: %v", err)
+	}
+	if len(spans) != 1 {
+		t.Fatalf("expected 1 span, got %d", len(spans))
+	}
+
+	span := spans[0]
+	if span.Status == nil || span.Status.Code != tracepb.Status_STATUS_CODE_ERROR {
+		t.Errorf("expected ERROR status for unknown outcome, got %v", span.Status)
+	}
+}
+
 // decodeOTELLines is a helper function that uses Decoder to decode OTEL lines
 func decodeOTELLines(lines []string, cutoffTimeNano uint64) ([]*tracepb.Span, []*logspb.LogRecord, error) {
 	decoder := NewDecoder(cutoffTimeNano)
