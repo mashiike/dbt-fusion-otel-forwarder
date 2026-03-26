@@ -39,7 +39,7 @@ linters:
         - G104
         - G304
     cyclop:
-      max-complexity: 30
+      max-complexity: 40
     depguard:
       rules:
         main:

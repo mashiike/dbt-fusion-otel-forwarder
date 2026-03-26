@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -12,6 +13,13 @@ import (
 	logspb "go.opentelemetry.io/proto/otlp/logs/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 )
+
+// nonErrorOutcomes is a list of node outcomes that are not considered errors.
+// e.g. ephemeral models skipped due to NO_OP
+var nonErrorOutcomes = []string{
+	"NODE_OUTCOME_SUCCESS",
+	"NODE_OUTCOME_SKIPPED",
+}
 
 // spanPartial represents an incomplete span being assembled from SpanStart/SpanEnd
 type spanPartial struct {
@@ -170,107 +178,10 @@ func (d *Decoder) DecodeLines(lines []string) ([]*tracepb.Span, []*logspb.LogRec
 					}
 				}
 
-				// Check for test failure in node_test_detail and create exception event
+				// Check for test/node failures in attributes and create exception events
 				if attrsObj, ok := obj["attributes"].(map[string]any); ok {
-					if testDetail, ok := attrsObj["node_test_detail"].(map[string]any); ok {
-						if outcome := stringFrom(testDetail, "test_outcome"); outcome == "TEST_OUTCOME_FAILED" {
-							// Create exception event for test failure
-							exceptionAttrs := []*commonpb.KeyValue{
-								{
-									Key:   "exception.type",
-									Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: "dbt.TestFailure"}},
-								},
-							}
-
-							// Build exception message with unique_id
-							failingRows := getInt(testDetail, "failing_rows")
-							uniqueID := stringFrom(attrsObj, "unique_id")
-							exceptionMsg := fmt.Sprintf("Test failed with %d failing rows", failingRows)
-							if uniqueID != "" {
-								exceptionMsg = fmt.Sprintf("Test '%s' failed with %d failing rows", uniqueID, failingRows)
-							}
-
-							exceptionAttrs = append(exceptionAttrs, &commonpb.KeyValue{
-								Key:   "exception.message",
-								Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: exceptionMsg}},
-							})
-
-							// Add failing_rows as additional context
-							if failingRows > 0 {
-								exceptionAttrs = append(exceptionAttrs, &commonpb.KeyValue{
-									Key:   "dbt.test.failing_rows",
-									Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: int64(failingRows)}},
-								})
-							}
-
-							exceptionEvent := &tracepb.Span_Event{
-								Name:         "exception",
-								TimeUnixNano: p.end,
-								Attributes:   exceptionAttrs,
-							}
-							p.events = append(p.events, exceptionEvent)
-
-							p.statusCode = tracepb.Status_STATUS_CODE_ERROR
-							if p.statusMessage == "" {
-								p.statusMessage = exceptionMsg
-							}
-						}
-					}
-
-					// Check for Node Evaluated failure and create exception event
-					if nodeOutcome := stringFrom(attrsObj, "node_outcome"); nodeOutcome != "" && nodeOutcome != "NODE_OUTCOME_SUCCESS" {
-						// Create exception event for node evaluation failure
-						exceptionAttrs := []*commonpb.KeyValue{
-							{
-								Key:   "exception.type",
-								Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: "dbt.NodeEvaluationFailure"}},
-							},
-						}
-
-						// Build exception message
-						nodeType := stringFrom(attrsObj, "node_type")
-						nodeName := stringFrom(attrsObj, "name")
-						uniqueID := stringFrom(attrsObj, "unique_id")
-						exceptionMsg := fmt.Sprintf("Node evaluation failed: %s (outcome: %s)", uniqueID, nodeOutcome)
-						if nodeName != "" {
-							exceptionMsg = fmt.Sprintf("Node '%s' evaluation failed (outcome: %s)", nodeName, nodeOutcome)
-						}
-
-						exceptionAttrs = append(exceptionAttrs, &commonpb.KeyValue{
-							Key:   "exception.message",
-							Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: exceptionMsg}},
-						})
-
-						// Add node details as additional context
-						if nodeType != "" {
-							exceptionAttrs = append(exceptionAttrs, &commonpb.KeyValue{
-								Key:   "dbt.node.type",
-								Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: nodeType}},
-							})
-						}
-						if uniqueID != "" {
-							exceptionAttrs = append(exceptionAttrs, &commonpb.KeyValue{
-								Key:   "dbt.node.unique_id",
-								Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: uniqueID}},
-							})
-						}
-						exceptionAttrs = append(exceptionAttrs, &commonpb.KeyValue{
-							Key:   "dbt.node.outcome",
-							Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: nodeOutcome}},
-						})
-
-						exceptionEvent := &tracepb.Span_Event{
-							Name:         "exception",
-							TimeUnixNano: p.end,
-							Attributes:   exceptionAttrs,
-						}
-						p.events = append(p.events, exceptionEvent)
-
-						p.statusCode = tracepb.Status_STATUS_CODE_ERROR
-						if p.statusMessage == "" {
-							p.statusMessage = exceptionMsg
-						}
-					}
+					p.checkTestFailure(attrsObj)
+					p.checkNodeOutcomeFailure(attrsObj)
 				}
 
 				// SpanEnd received - if we have start time, emit the complete span
@@ -319,6 +230,115 @@ func (d *Decoder) DecodeLines(lines []string) ([]*tracepb.Span, []*logspb.LogRec
 	sortLogsByTime(logs)
 
 	return completeSpans, logs, nil
+}
+
+// checkTestFailure checks for test failure in node_test_detail and creates an exception event.
+func (p *spanPartial) checkTestFailure(attrsObj map[string]any) {
+	testDetail, ok := attrsObj["node_test_detail"].(map[string]any)
+	if !ok {
+		return
+	}
+	if outcome := stringFrom(testDetail, "test_outcome"); outcome != "TEST_OUTCOME_FAILED" {
+		return
+	}
+
+	exceptionAttrs := []*commonpb.KeyValue{
+		{
+			Key:   "exception.type",
+			Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: "dbt.TestFailure"}},
+		},
+	}
+
+	failingRows := getInt(testDetail, "failing_rows")
+	uniqueID := stringFrom(attrsObj, "unique_id")
+	exceptionMsg := fmt.Sprintf("Test failed with %d failing rows", failingRows)
+	if uniqueID != "" {
+		exceptionMsg = fmt.Sprintf("Test '%s' failed with %d failing rows", uniqueID, failingRows)
+	}
+
+	exceptionAttrs = append(exceptionAttrs, &commonpb.KeyValue{
+		Key:   "exception.message",
+		Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: exceptionMsg}},
+	})
+
+	if failingRows > 0 {
+		exceptionAttrs = append(exceptionAttrs, &commonpb.KeyValue{
+			Key:   "dbt.test.failing_rows",
+			Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: int64(failingRows)}},
+		})
+	}
+
+	p.events = append(p.events, &tracepb.Span_Event{
+		Name:         "exception",
+		TimeUnixNano: p.end,
+		Attributes:   exceptionAttrs,
+	})
+
+	p.statusCode = tracepb.Status_STATUS_CODE_ERROR
+	if p.statusMessage == "" {
+		p.statusMessage = exceptionMsg
+	}
+}
+
+// checkNodeOutcomeFailure checks for node evaluation failure and creates an exception event.
+func (p *spanPartial) checkNodeOutcomeFailure(attrsObj map[string]any) {
+	nodeOutcome := stringFrom(attrsObj, "node_outcome")
+	if nodeOutcome == "" || slices.Contains(nonErrorOutcomes, nodeOutcome) {
+		return
+	}
+
+	exceptionAttrs := []*commonpb.KeyValue{
+		{
+			Key:   "exception.type",
+			Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: "dbt.NodeEvaluationFailure"}},
+		},
+	}
+
+	nodeType := stringFrom(attrsObj, "node_type")
+	nodeName := stringFrom(attrsObj, "name")
+	uniqueID := stringFrom(attrsObj, "unique_id")
+	var exceptionMsg string
+	switch {
+	case nodeName != "":
+		exceptionMsg = fmt.Sprintf("Node '%s' evaluation failed (outcome: %s)", nodeName, nodeOutcome)
+	case uniqueID != "":
+		exceptionMsg = fmt.Sprintf("Node evaluation failed: %s (outcome: %s)", uniqueID, nodeOutcome)
+	default:
+		exceptionMsg = fmt.Sprintf("Node evaluation failed (outcome: %s)", nodeOutcome)
+	}
+
+	exceptionAttrs = append(exceptionAttrs, &commonpb.KeyValue{
+		Key:   "exception.message",
+		Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: exceptionMsg}},
+	})
+
+	if nodeType != "" {
+		exceptionAttrs = append(exceptionAttrs, &commonpb.KeyValue{
+			Key:   "dbt.node.type",
+			Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: nodeType}},
+		})
+	}
+	if uniqueID != "" {
+		exceptionAttrs = append(exceptionAttrs, &commonpb.KeyValue{
+			Key:   "dbt.node.unique_id",
+			Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: uniqueID}},
+		})
+	}
+	exceptionAttrs = append(exceptionAttrs, &commonpb.KeyValue{
+		Key:   "dbt.node.outcome",
+		Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: nodeOutcome}},
+	})
+
+	p.events = append(p.events, &tracepb.Span_Event{
+		Name:         "exception",
+		TimeUnixNano: p.end,
+		Attributes:   exceptionAttrs,
+	})
+
+	p.statusCode = tracepb.Status_STATUS_CODE_ERROR
+	if p.statusMessage == "" {
+		p.statusMessage = exceptionMsg
+	}
 }
 
 // buildSpan converts a spanPartial to a complete OTLP Span
