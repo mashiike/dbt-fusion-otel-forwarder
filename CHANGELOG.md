@@ -1,5 +1,11 @@
 # Changelog
 
+## [v0.4.0](https://github.com/mashiike/dbt-fusion-otel-forwarder/compare/v0.3.1...v0.4.0) - 2026-05-28
+- feat(exporter): retry OTLP uploads before giving up by @mashiike in https://github.com/mashiike/dbt-fusion-otel-forwarder/pull/33
+- build(deps): bump actions/setup-go from 6.1.0 to 6.2.0 by @dependabot[bot] in https://github.com/mashiike/dbt-fusion-otel-forwarder/pull/21
+- build(deps): bump Songmu/tagpr from 1.9.0 to 1.17.0 by @dependabot[bot] in https://github.com/mashiike/dbt-fusion-otel-forwarder/pull/27
+- build(deps): bump goreleaser/goreleaser-action from 7.0.0 to 7.2.2 by @dependabot[bot] in https://github.com/mashiike/dbt-fusion-otel-forwarder/pull/29
+
 ## [v0.3.1](https://github.com/mashiike/dbt-fusion-otel-forwarder/compare/v0.3.0...v0.3.1) - 2026-03-26
 - chore: update dependencies and testdata for dbt-fusion 2.0.0-preview.120 by @mashiike in https://github.com/mashiike/dbt-fusion-otel-forwarder/pull/30
 - fix: treat NODE_OUTCOME_SKIPPED as non-error in span status by @mashiike in https://github.com/mashiike/dbt-fusion-otel-forwarder/pull/32
