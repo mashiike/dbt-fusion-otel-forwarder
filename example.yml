@@ -12,6 +12,9 @@ exporters:
     # Uncomment to add authentication headers
     # headers:
     #   Authorization: "Bearer ${API_TOKEN:?API_TOKEN is required}"
+    # Optional upload retry settings (defaults shown).
+    # max_attempts: 3
+    # retry_interval: 5s
 
 forward:
   default:
