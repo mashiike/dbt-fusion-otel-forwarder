@@ -54,6 +54,9 @@ forward:
 ```
 
 - `exporters`: named OTLP exporters with per-signal overrides (protocol, gzip, headers, timeouts, user agent).
+  - `max_attempts`: number of upload attempts before giving up (default: `3`). Set to `1` to disable retries.
+  - `retry_interval`: wait between retries (default: `5s`). Accepts any Go duration string (e.g. `1s`, `500ms`).
+  - When all attempts fail the error is logged at `warn` and the forwarder still exits with the wrapped dbt command's status code.
 - `forward`: routing rules; this project currently emits traces and logs.
   - `attributes`: modify span/log attributes using static values or CEL expressions.
     - `action`: `set` (add/update) or `remove` (delete)

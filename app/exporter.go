@@ -5,8 +5,14 @@ import (
 	"errors"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/mashiike/go-otlp-helper/otlp"
+)
+
+const (
+	defaultMaxAttempts   = 3
+	defaultRetryInterval = 5 * time.Second
 )
 
 //go:generate go tool mockgen -source=$GOFILE -destination=./exporter_test.go -package=app
@@ -39,9 +45,72 @@ func NewExporter(ctx context.Context, cfg ExporterConfig) (Exporter, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &OonceStartExporter{Exporter: client}, nil
+		var exp Exporter = &OonceStartExporter{Exporter: client}
+		attempts := cfg.MaxAttempts
+		if attempts == 0 {
+			attempts = defaultMaxAttempts
+		}
+		interval := defaultRetryInterval
+		if cfg.RetryInterval != nil {
+			interval = *cfg.RetryInterval
+		}
+		if attempts > 1 {
+			exp = &RetryExporter{
+				Exporter:      exp,
+				MaxAttempts:   attempts,
+				RetryInterval: interval,
+			}
+		}
+		return exp, nil
 	}
 	return nil, errors.New("unsupported exporter type: " + cfg.Type)
+}
+
+type RetryExporter struct {
+	Exporter
+	MaxAttempts   int
+	RetryInterval time.Duration
+}
+
+func (e *RetryExporter) UploadLogs(ctx context.Context, protoLogs []*otlp.ResourceLogs) error {
+	return e.withRetry(ctx, "logs", func(ctx context.Context) error {
+		return e.Exporter.UploadLogs(ctx, protoLogs)
+	})
+}
+
+func (e *RetryExporter) UploadTraces(ctx context.Context, protoSpans []*otlp.ResourceSpans) error {
+	return e.withRetry(ctx, "traces", func(ctx context.Context) error {
+		return e.Exporter.UploadTraces(ctx, protoSpans)
+	})
+}
+
+func (e *RetryExporter) withRetry(ctx context.Context, kind string, fn func(context.Context) error) error {
+	var lastErr error
+	for i := 0; i < e.MaxAttempts; i++ {
+		err := fn(ctx)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if ctx.Err() != nil {
+			return lastErr
+		}
+		if i < e.MaxAttempts-1 {
+			slog.Warn("upload failed, will retry",
+				"kind", kind,
+				"attempt", i+1,
+				"max_attempts", e.MaxAttempts,
+				"retry_interval", e.RetryInterval,
+				"error", err,
+			)
+			select {
+			case <-time.After(e.RetryInterval):
+			case <-ctx.Done():
+				return lastErr
+			}
+		}
+	}
+	return lastErr
 }
 
 type OonceStartExporter struct {

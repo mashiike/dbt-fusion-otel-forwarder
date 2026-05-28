@@ -33,8 +33,10 @@ func (cfg *Config) Validate() error {
 }
 
 type ExporterConfig struct {
-	Type string             `yaml:"type"`
-	Otlp OtlpExporterConfig `yaml:",inline"`
+	Type          string             `yaml:"type"`
+	MaxAttempts   int                `yaml:"max_attempts,omitempty"`
+	RetryInterval *time.Duration     `yaml:"retry_interval,omitempty"`
+	Otlp          OtlpExporterConfig `yaml:",inline"`
 }
 
 func (cfg *ExporterConfig) Validate() error {

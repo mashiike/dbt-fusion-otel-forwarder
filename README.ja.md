@@ -57,6 +57,9 @@ forward:
 ```
 
 - `exporters`: OTLP exporter を名前付きで定義（protocol/gzip/headers/timeouts/user agent などの上書き可）。
+  - `max_attempts`: アップロードを試行する最大回数（デフォルト: `3`）。`1` を指定するとリトライ無し。
+  - `retry_interval`: リトライ間隔（デフォルト: `5s`）。`1s`, `500ms` など Go の duration 文字列が使えます。
+  - 全試行が失敗した場合は `warn` ログを出して諦め、wrap した dbt コマンドの終了コードでそのまま終了します。
 - `forward`: ルーティング設定。本プロジェクトは trace と log を送信します。
   - `attributes`: 静的な値またはCEL式を使ってspan/log属性を変更できます。
     - `action`: `set` (追加/更新) または `remove` (削除)
