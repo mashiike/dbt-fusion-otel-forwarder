@@ -4,7 +4,7 @@ go 1.25.3
 
 require (
 	github.com/goccy/go-yaml v1.19.2
-	github.com/google/cel-go v0.28.1
+	github.com/google/cel-go v0.30.0
 	github.com/mashiike/go-otlp-helper v0.4.2
 	github.com/sebdah/goldie/v2 v2.8.0
 	github.com/stretchr/testify v1.11.1
